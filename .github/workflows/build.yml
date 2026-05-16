@@ -1,29 +1,52 @@
-name: Build EXE
+name: Build EXE and Auto Release
 
-on: [push]  # 当你推送代码到GitHub时，这个工作流就会自动启动
+on: [push]  # 每次推送都触发
+
+permissions:
+  contents: write   # 必须添加，允许创建 Release
 
 jobs:
   build:
-    runs-on: windows-latest  # 打包环境
-    steps:
-    - uses: actions/checkout@v4  # 第一步：拉取你的代码
+    runs-on: windows-latest
 
-    - name: Set up Python  # 第二步：安装Python环境
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.x'
 
-    - name: Install dependencies  # 第三步：安装你的项目依赖
-      run: pip install -r requirements.txt  # 确保你的仓库里有requirements.txt文件
+    - name: Install dependencies
+      run: pip install -r requirements.txt
 
-    - name: Install PyInstaller  # 第四步：安装打包工具
+    - name: Install PyInstaller
       run: pip install pyinstaller
 
-    - name: Build with PyInstaller  # 第五步：执行打包命令
-      run: pyinstaller -F main.py
+    - name: Build with PyInstaller
+      run: pyinstaller -F -i  XYY.ico -w -n "WVP目录名称修改工具" main.py
 
-    - name: Upload EXE  # 第六步：上传打包好的文件
+    - name: Upload EXE as artifact (optional)
       uses: actions/upload-artifact@v4
       with:
-        name: my-windows-exe
+        name: WVP目录名称修改工具
         path: dist/*.exe
+
+    # ========== 新增：生成动态 tag 名称 ==========
+    - name: Generate dynamic tag name
+      id: vars
+      shell: bash
+      run: |
+        SHORT_SHA=$(git rev-parse --short HEAD)
+        echo "TAG_NAME=auto-build-${SHORT_SHA}" >> $GITHUB_ENV
+
+    # ========== 新增：自动创建 Release 并上传 exe ==========
+    - name: Create Release and upload asset
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ env.TAG_NAME }}
+        name: "Auto build for commit ${{ env.TAG_NAME }}"
+        prerelease: true                # 标记为预发布（可选）
+        files: dist/*.exe
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
