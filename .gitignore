@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+*.spec
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+*.suo
+*.sln
+
+# Config (contains login credentials)
+.login_config.json
+
+# Backup files
+*.bak
+
+# Logs
+*.log
+
+# OS
+Thumbs.db
+.DS_Store
