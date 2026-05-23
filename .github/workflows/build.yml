@@ -1,9 +1,9 @@
 name: Build EXE and Auto Release
 
-on: [push]  # 每次推送都触发
+on: [push]
 
 permissions:
-  contents: write   # 必须添加，允许创建 Release
+  contents: write
 
 jobs:
   build:
@@ -15,38 +15,35 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.x'
+        python-version: '3.11'
 
     - name: Install dependencies
-      run: pip install -r requirements.txt
-
-    - name: Install PyInstaller
-      run: pip install pyinstaller
+      run: |
+        pip install -r requirements.txt
+        pip install pyinstaller
 
     - name: Build with PyInstaller
-      run: pyinstaller -F -i  XYY.ico -w -n "WVP目录名称修改工具" main.py
+      run: pyinstaller -F -i XYY.ico -w -n "WVP通道管理工具" main.py
 
-    - name: Upload EXE as artifact (optional)
+    - name: Upload EXE as artifact
       uses: actions/upload-artifact@v4
       with:
-        name: WVP目录名称修改工具
+        name: WVP通道管理工具
         path: dist/*.exe
 
-    # ========== 新增：生成动态 tag 名称 ==========
-    - name: Generate dynamic tag name
+    - name: Generate tag name
       id: vars
       shell: bash
       run: |
         SHORT_SHA=$(git rev-parse --short HEAD)
         echo "TAG_NAME=auto-build-${SHORT_SHA}" >> $GITHUB_ENV
 
-    # ========== 新增：自动创建 Release 并上传 exe ==========
     - name: Create Release and upload asset
       uses: softprops/action-gh-release@v2
       with:
         tag_name: ${{ env.TAG_NAME }}
-        name: "Auto build for commit ${{ env.TAG_NAME }}"
-        prerelease: true                # 标记为预发布（可选）
+        name: "自动构建 ${{ env.TAG_NAME }}"
+        prerelease: true
         files: dist/*.exe
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

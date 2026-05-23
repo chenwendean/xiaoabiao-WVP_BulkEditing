@@ -11,9 +11,16 @@ import requests
 import threading
 import json
 import os
+import sys
 import base64
 
-CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".login_config.json")
+def _config_dir():
+    """exe 运行时存在 exe 同目录，源码运行时存在脚本同目录"""
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+CONFIG_FILE = os.path.join(_config_dir(), ".login_config.json")
 DEFAULT_HOST = "http://127.0.0.1:18080"
 DEFAULT_USERNAME = "admin"
 

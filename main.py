@@ -12,10 +12,11 @@ from main_app import MainApplication
 
 def main():
     def on_login_success(token, user, host):
-        login_window.root.destroy()          # 销毁登录窗口
-        root = tk.Tk()
-        MainApplication(root, token, user, host)
-        root.mainloop()
+        # 清除登录窗口内容，复用同一个 root
+        for w in login_window.root.winfo_children():
+            w.destroy()
+        login_window.root.title("WVP通道管理工具 v7.0 by Xiaoabiao")
+        MainApplication(login_window.root, token, user, host)
 
     login_window = LoginWindow(on_success_callback=on_login_success)
     login_window.root.mainloop()

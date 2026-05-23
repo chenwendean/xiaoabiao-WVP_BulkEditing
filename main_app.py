@@ -12,6 +12,7 @@ import requests
 import threading
 from datetime import datetime
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # 尝试导入 openpyxl（非必需，但导出/导入需要）
 try:
@@ -34,6 +35,7 @@ class MainApplication:
         self.root.title("WVP通道管理工具 v7.0 by Xiaoabiao")
         self.root.geometry("1200x800")
         self.root.minsize(1000, 650)
+        self.root.resizable(True, True)
 
         # 设备列表相关
         self.all_devices = []           # 全部设备列表
@@ -43,7 +45,7 @@ class MainApplication:
 
         self.status_text = tk.StringVar(value=f"已登录: {user_info.get('username', '')}")
         self.page_num = 1
-        self.page_size = 100
+        self.page_size = 50000
         self.total_channels = 0
         self.all_channels = []
         self.item_to_channel = {}
@@ -59,6 +61,7 @@ class MainApplication:
         self.dev_check_vars = {}
 
         self.progress = None          # 进度弹窗实例
+        self.max_workers = 8          # 并发线程数（可自定义）
 
         self.setup_styles()
         self.build_ui()
@@ -81,6 +84,9 @@ class MainApplication:
         top_bar.pack(fill=tk.X, padx=10, pady=(5, 0))
         ttk.Label(top_bar, text=f"  {self.login_user.get('username', '')}",
                   font=("Microsoft YaHei", 10, "bold")).pack(side=tk.LEFT)
+        self.thread_btn = ttk.Button(top_bar, text=f"并发: {self.max_workers}",
+                                      command=self.set_max_workers, width=10)
+        self.thread_btn.pack(side=tk.RIGHT, padx=5)
         ttk.Button(top_bar, text="退出登录", command=self.logout).pack(side=tk.RIGHT, padx=5)
         ttk.Separator(self.root, orient='horizontal').pack(fill=tk.X, padx=10, pady=(2, 0))
 
@@ -141,6 +147,107 @@ class MainApplication:
 
     def set_statusbar(self, msg):
         self.statusbar_var.set(f"{msg}  [{datetime.now().strftime('%H:%M:%S')}]")
+
+    def _show_progress(self, title, total):
+        """显示进度弹窗"""
+        if self.progress:
+            try:
+                self.progress.close()
+            except:
+                pass
+        self.progress = ProgressDialog(self.root, title, total)
+
+    def _close_progress(self):
+        if self.progress:
+            try:
+                self.progress.close()
+            except:
+                pass
+            self.progress = None
+
+    def set_max_workers(self):
+        """弹窗修改并发线程数"""
+        val = simpledialog.askinteger("并发设置",
+            f"当前并发线程数: {self.max_workers}\n请输入新的数值（1-32）:",
+            initialvalue=self.max_workers, minvalue=1, maxvalue=32, parent=self.root)
+        if val:
+            self.max_workers = val
+            self.thread_btn.configure(text=f"并发: {self.max_workers}")
+            self.set_statusbar(f"并发线程数已设为 {self.max_workers}")
+
+    # ---------- 并发分页查询通道 ----------
+    def _concurrent_channel_query(self, device_id, page_size=100, progress=None):
+        """并发分页查询设备通道，返回 (channels, total)
+           progress: 可选回调 (current, total, text)
+        """
+        host = self.server_host.get().strip().rstrip('/')
+        token = self.access_token
+        headers = {"Accept": "*/*", "access-token": token}
+        url = f"{host}/api/device/query/devices/{device_id}/channels"
+        base_params = {"query": "", "cameraQuery": "", "nvrQuery": ""}
+
+        if progress:
+            progress(0, 1, "正在获取总页数...")
+
+        # 先查第一页获取总数
+        try:
+            r = requests.get(url, headers=headers, params={
+                **base_params, "page": 1, "count": page_size}, timeout=30)
+            if r.status_code != 200:
+                return [], 0
+            data = r.json()
+            if data.get("code") != 0:
+                return [], 0
+            inner = data.get("data", {})
+            first_batch = inner.get("list", [])
+            total = inner.get("total", 0) or len(first_batch)
+        except Exception:
+            return [], 0
+
+        if total <= page_size:
+            if progress:
+                progress(1, 1, f"查询完成，共 {total} 个通道")
+            return first_batch, total
+
+        total_pages = (total + page_size - 1) // page_size
+        pages_list = {1: first_batch}
+        page_range = range(2, total_pages + 1)
+
+        if progress:
+            progress(0, total_pages, f"共 {total_pages} 页，正在并发查询...")
+
+        def fetch_page(pg):
+            try:
+                resp = requests.get(url, headers=headers, params={
+                    **base_params, "page": pg, "count": page_size}, timeout=30)
+                if resp.status_code == 200:
+                    d = resp.json()
+                    if d.get("code") == 0:
+                        return pg, d.get("data", {}).get("list", [])
+            except Exception:
+                pass
+            return pg, []
+
+        fetched = [len(first_batch)]
+        done = [1]
+        with ThreadPoolExecutor(max_workers=self.max_workers) as ex:
+            fut_map = {ex.submit(fetch_page, p): p for p in page_range}
+            for fut in as_completed(fut_map):
+                pg, lst = fut.result()
+                pages_list[pg] = lst
+                fetched[0] += len(lst)
+                done[0] += 1
+                if progress:
+                    progress(fetched[0], total,
+                        f"正在查询 ({fetched[0]}/{total} 个通道)...")
+
+        all_channels = []
+        for pg in sorted(pages_list):
+            all_channels.extend(pages_list[pg])
+
+        if progress:
+            progress(total, total, f"查询完成，共 {total} 个通道")
+        return all_channels, total
 
     # ========== 设备列表相关 ==========
 
@@ -225,6 +332,19 @@ class MainApplication:
         self.set_statusbar(f"查询成功 - 共 {total} 个国标设备")
         self.update_ui_state()
 
+    def _update_dev_header(self):
+        """更新设备列表 ☐ 表头状态"""
+        if not self.dev_check_vars:
+            return
+        all_checked = all(var.get() for var in self.dev_check_vars.values())
+        any_checked = any(var.get() for var in self.dev_check_vars.values())
+        if all_checked:
+            self.dev_tree.heading("#1", text="☑")
+        elif any_checked:
+            self.dev_tree.heading("#1", text="☐")
+        else:
+            self.dev_tree.heading("#1", text="☐")
+
     def toggle_dev_select_all(self):
         """点击 ☐ 表头 = 全选/取消全选"""
         if not self.dev_check_vars:
@@ -235,9 +355,13 @@ class MainApplication:
         for item, var in self.dev_check_vars.items():
             var.set(new_state)
             self.dev_tree.set(item, "#1", "☑" if new_state else "☐")
+        self._update_dev_header()
 
     def on_dev_checkbox_click(self, event):
-        """设备列表复选框点击"""
+        """设备列表复选框点击（仅处理数据行的点击，表头点击由 toggle_dev_select_all 处理）"""
+        region = self.dev_tree.identify_region(event.x, event.y)
+        if region != "cell":
+            return
         col = self.dev_tree.identify_column(event.x)
         if col != "#1":
             return
@@ -248,6 +372,8 @@ class MainApplication:
         if var:
             var.set(not var.get())
             self.dev_tree.set(item, "#1", "☑" if var.get() else "☐")
+            self._update_dev_header()
+        return "break"
 
     def _devices_fail(self, msg):
         self.dev_count_var.set("查询失败")
@@ -269,45 +395,35 @@ class MainApplication:
                          args=(device_id, device_name), daemon=True).start()
 
     def _open_device_window(self, device_id, device_name):
-        """后台查询通道并在新窗口展示"""
-        channels = []
-        # 主线程取值，避免线程中访问 tk 变量
+        """后台查询通道并在新窗口展示（并发分页+进度条）"""
         host = self.server_host.get().strip().rstrip('/')
         token = self.access_token
         try:
             headers = {"Accept": "*/*", "access-token": token}
-            page = 1
-            while True:
-                url = f"{host}/api/device/query/devices/{device_id}/channels"
-                resp = requests.get(url, headers=headers, params={
-                    "page": page, "count": 100,
-                    "query": "", "cameraQuery": "", "nvrQuery": ""
-                }, timeout=30)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if data.get("code") == 0:
-                        lst = data.get("data", {}).get("list", [])
-                        channels.extend(lst)
-                        if len(lst) < 100:
-                            break
-                        page += 1
-                    else:
-                        break
-                else:
-                    break
-            # 合并全局通道数据（厂家/经纬度）
-            for dc in channels:
+            self.root.after(0, lambda: self._show_progress(
+                f"正在查询 {device_name}", 1))
+
+            def on_progress(c, t, text):
+                self.root.after(0, lambda: self.progress.update(c, t, text))
+
+            channels, total = self._concurrent_channel_query(
+                device_id, progress=on_progress)
+            # 进度条继续显示合并全局通道数据
+            merge_done = [0]
+            merge_total = len(channels)
+
+            def merge_one(dc):
                 dc_id = dc.get("id") or dc.get("gbId")
                 if not dc_id:
-                    continue
+                    return dc
                 try:
-                    one_url = f"{host}/api/common/channel/one"
-                    one_resp = requests.get(one_url, headers=headers,
+                    one_resp = requests.get(f"{host}/api/common/channel/one",
+                                            headers=headers,
                                             params={"id": dc_id}, timeout=15)
                     if one_resp.status_code == 200:
-                        one_data = one_resp.json()
-                        if one_data.get("code") == 0:
-                            gc = one_data.get("data")
+                        od = one_resp.json()
+                        if od.get("code") == 0:
+                            gc = od.get("data")
                             if gc and isinstance(gc, dict):
                                 for fld in ("gbManufacturer", "gbLongitude", "gbLatitude",
                                             "gbName", "gbCivilCode"):
@@ -315,6 +431,19 @@ class MainApplication:
                                         dc[fld] = gc[fld]
                 except Exception:
                     pass
+                return dc
+
+            def merge_with_progress(dc):
+                result = merge_one(dc)
+                merge_done[0] += 1
+                if merge_done[0] % 50 == 0:
+                    on_progress(merge_done[0], merge_total,
+                        f"合并通道数据 ({merge_done[0]}/{merge_total})...")
+                return result
+
+            with ThreadPoolExecutor(max_workers=self.max_workers) as ex:
+                list(ex.map(merge_with_progress, channels))
+            self.root.after(0, lambda: self._close_progress())
         except Exception as e:
             self.root.after(0, lambda e=e:
                 messagebox.showerror("查询失败", str(e)))
@@ -349,7 +478,7 @@ class MainApplication:
         ttk.Button(btn_row, text="导入Excel",
                    command=lambda: self._win_import(win, channels, device_id, device_name)).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_row, text="批量修改区域编码",
-                   command=lambda: self._win_batch_region(win, channels, tree)).pack(side=tk.LEFT, padx=5)
+                   command=lambda: self._win_batch_region(win, tree, check_vars, item_to_ch)).pack(side=tk.LEFT, padx=5)
         ttk.Label(btn_row, text="双击单元格修改", foreground="gray",
                   font=("Microsoft YaHei", 9)).pack(side=tk.RIGHT)
 
@@ -365,6 +494,24 @@ class MainApplication:
         for col, w in zip(columns, col_widths):
             tree.heading(col, text=col)
             tree.column(col, width=w, anchor=tk.CENTER, minwidth=w)
+
+        # 表头 ☐ 点击 = 全选/取消全选
+        def update_ch_header():
+            if not check_vars:
+                return
+            all_checked = all(v.get() for v in check_vars.values())
+            tree.heading("#1", text="☑" if all_checked else "☐")
+
+        def toggle_all_ch():
+            if not check_vars:
+                return
+            all_checked = all(v.get() for v in check_vars.values())
+            new_state = not all_checked
+            for item, v in check_vars.items():
+                v.set(new_state)
+                tree.set(item, "#1", "☑" if new_state else "☐")
+            update_ch_header()
+        tree.heading("#1", command=toggle_all_ch)
 
         vsb = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=tree.yview)
         hsb = ttk.Scrollbar(frame, orient=tk.HORIZONTAL, command=tree.xview)
@@ -393,6 +540,9 @@ class MainApplication:
 
         # 复选框点击
         def on_chk_click(event):
+            region = tree.identify_region(event.x, event.y)
+            if region != "cell":
+                return
             col = tree.identify_column(event.x)
             if col != "#1":
                 return
@@ -401,6 +551,8 @@ class MainApplication:
                 v = check_vars[it]
                 v.set(not v.get())
                 tree.set(it, "#1", "☑" if v.get() else "☐")
+                update_ch_header()
+            return "break"
 
         tree.bind("<Button-1>", on_chk_click)
 
@@ -628,13 +780,18 @@ class MainApplication:
         ttk.Button(win, text="关闭", command=win.destroy).pack(pady=(0, 8))
 
     def _win_batch_update(self, win, tasks, tree, item_to_ch, set_st):
-        """窗口内批量提交导入的修改"""
+        """窗口内批量提交导入的修改（并发8线程）"""
         host = self.server_host.get().strip().rstrip('/')
         headers = {"Accept": "*/*", "access-token": self.access_token,
                    "Content-Type": "application/json"}
-        success = fail = 0
         total = len(tasks)
-        for idx, (ch, nn, nc, lo, la, mf) in enumerate(tasks, 1):
+        done_count = [0]
+        success = [0]
+        fail = [0]
+        updated_channels = []
+
+        def do_update(task):
+            ch, nn, nc, lo, la, mf = task
             upd = {}
             if nn != ch.get("name", ""):
                 upd["gbName"] = nn
@@ -657,27 +814,100 @@ class MainApplication:
             if mf and mf != ch.get("gbManufacturer", ""):
                 upd["gbManufacturer"] = mf
             if not upd:
-                success += 1
-                continue
+                return True, ch, None
             try:
                 body = self.build_channel_body(ch, upd)
                 resp = requests.post(f"{host}/api/common/channel/update",
                                      headers=headers, json=body, timeout=15)
                 if resp.status_code == 200 and resp.json().get("code") == 0:
-                    success += 1
                     for k, v in upd.items():
                         ch[k] = v
-                else:
-                    fail += 1
+                    return True, ch, None
             except Exception:
-                fail += 1
-            self.root.after(0, lambda c=idx, t=total:
-                set_st(f"导入中 ({c}/{t})..."))
-        self.root.after(0, lambda: set_st(f"导入完成: 成功 {success}, 失败 {fail}"))
+                pass
+            return False, None, upd
+
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            futures = {executor.submit(do_update, task): task for task in tasks}
+            for future in as_completed(futures):
+                ok, ch, upd = future.result()
+                if ok:
+                    success[0] += 1
+                    if ch:
+                        updated_channels.append(ch)
+                else:
+                    fail[0] += 1
+                done_count[0] += 1
+                self.root.after(0, lambda c=done_count[0], t=total:
+                    set_st(f"导入中 ({c}/{t})..."))
+        self.root.after(0, lambda: set_st(f"导入完成: 成功 {success[0]}, 失败 {fail[0]}"))
         self.root.after(0, lambda: messagebox.showinfo("结果",
-            f"成功: {success} 条\n失败: {fail} 条", parent=win))
-        if success > 0:
-            self.root.after(0, lambda: self._refresh_win_tree(tree, channels, item_to_ch))
+            f"成功: {success[0]} 条\n失败: {fail[0]} 条", parent=win))
+        if success[0] > 0:
+            self.root.after(0, lambda: self._refresh_win_tree(tree, [t[0] for t in tasks], item_to_ch))
+
+    def _win_batch_region(self, win, tree, check_vars, item_to_ch):
+        """弹窗内批量修改区域编码"""
+        checked = [it for it, var in check_vars.items() if var.get()]
+        if not checked:
+            messagebox.showwarning("提示", "请先勾选要修改的通道", parent=win)
+            return
+        new_region = simpledialog.askstring("批量修改区域编码",
+                                            f"已选中 {len(checked)} 个通道\n请输入新的区域编码:",
+                                            parent=win)
+        if not new_region or not new_region.strip():
+            return
+        new_region = new_region.strip()
+        if not messagebox.askyesno("确认",
+                f"将为选中的 {len(checked)} 个通道设置区域编码为:\n'{new_region}'?\n\n确认修改?",
+                parent=win):
+            return
+        threading.Thread(target=self._win_do_batch_region,
+                         args=(win, checked, tree, new_region, item_to_ch), daemon=True).start()
+
+    def _win_do_batch_region(self, win, checked_items, tree, new_region, item_to_ch):
+        """实际执行批量修改（并发8线程）"""
+        host = self.server_host.get().strip().rstrip('/')
+        headers = {"Accept": "*/*", "access-token": self.access_token,
+                   "Content-Type": "application/json"}
+        total = len(checked_items)
+        done_count = [0]
+        success = [0]
+        fail = [0]
+
+        def do_update(it):
+            ch = item_to_ch.get(it)
+            if not ch:
+                return False, None, None
+            updates = {"gbCivilCode": new_region, "civilCode": new_region}
+            try:
+                body = self.build_channel_body(ch, updates)
+                resp = requests.post(f"{host}/api/common/channel/update",
+                                     headers=headers, json=body, timeout=15)
+                if resp.status_code == 200 and resp.json().get("code") == 0:
+                    return True, ch, it
+            except Exception:
+                pass
+            return False, None, None
+
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            futures = {executor.submit(do_update, it): it for it in checked_items}
+            for future in as_completed(futures):
+                ok, ch, it = future.result()
+                if ok:
+                    success[0] += 1
+                    if ch and it:
+                        ch["civilCode"] = new_region
+                        self.root.after(0, lambda i=it: tree.set(i, "#5", new_region))
+                else:
+                    fail[0] += 1
+                done_count[0] += 1
+                self.root.after(0, lambda c=done_count[0], t=total:
+                    self.set_statusbar(f"批量修改中 ({c}/{t})..."))
+        self.root.after(0, lambda: self.set_statusbar(
+            f"批量修改完成: 成功 {success[0]}, 失败 {fail[0]}"))
+        self.root.after(0, lambda: messagebox.showinfo("结果",
+            f"成功: {success[0]} 条\n失败: {fail[0]} 条", parent=win))
 
     def _win_refresh(self, win, device_id, device_name,
                      tree, item_to_ch, check_vars, set_st):
@@ -689,40 +919,24 @@ class MainApplication:
 
     def _do_win_refresh(self, win, device_id, device_name,
                         tree, item_to_ch, check_vars, set_st):
-        """后台重新查询并刷新表格"""
+        """后台重新查询并刷新表格（并发分页）"""
         host = self.server_host.get().strip().rstrip('/')
         token = self.access_token
-        new_channels = []
         try:
             headers = {"Accept": "*/*", "access-token": token}
-            page = 1
-            while True:
-                url = f"{host}/api/device/query/devices/{device_id}/channels"
-                resp = requests.get(url, headers=headers, params={
-                    "page": page, "count": 100,
-                    "query": "", "cameraQuery": "", "nvrQuery": ""
-                }, timeout=30)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if data.get("code") == 0:
-                        lst = data.get("data", {}).get("list", [])
-                        new_channels.extend(lst)
-                        if len(lst) < 100:
-                            break
-                        page += 1
-                    else:
-                        break
-                else:
-                    break
-            # 合并全局通道数据
-            for dc in new_channels:
+            new_channels, total = self._concurrent_channel_query(device_id)
+            # 并发合并全局通道数据
+            merge_done = [0]
+            merge_total = len(new_channels)
+
+            def merge_one(dc):
                 dc_id = dc.get("id") or dc.get("gbId")
                 if not dc_id:
-                    continue
+                    return dc
                 try:
-                    one_resp = requests.get(
-                        f"{host}/api/common/channel/one",
-                        headers=headers, params={"id": dc_id}, timeout=15)
+                    one_resp = requests.get(f"{host}/api/common/channel/one",
+                                            headers=headers,
+                                            params={"id": dc_id}, timeout=15)
                     if one_resp.status_code == 200:
                         od = one_resp.json()
                         if od.get("code") == 0:
@@ -734,6 +948,18 @@ class MainApplication:
                                         dc[fld] = gc[fld]
                 except Exception:
                     pass
+                return dc
+
+            def merge_with_progress(dc):
+                result = merge_one(dc)
+                merge_done[0] += 1
+                if merge_done[0] % 100 == 0:
+                    self.root.after(0, lambda c=merge_done[0], t=merge_total:
+                        set_st(f"合并通道数据 ({c}/{t})..."))
+                return result
+
+            with ThreadPoolExecutor(max_workers=self.max_workers) as ex:
+                list(ex.map(merge_with_progress, new_channels))
         except Exception as e:
             self.root.after(0, lambda e=e: set_st(f"刷新失败: {e}"))
             return
@@ -801,71 +1027,42 @@ class MainApplication:
         def task():
             try:
                 host = self.server_host.get().strip().rstrip('/')
-                url = f"{host}/api/device/query/devices/{device_id}/channels"
                 headers = {
                     "Accept": "*/*",
                     "access-token": self.access_token,
                     "Content-Type": "application/x-www-form-urlencoded"
                 }
-                all_channels = []
-                page = 1
-                count = self.page_size       # 每页请求条数，默认100
-                total = 0
+                all_channels, total = self._concurrent_channel_query(device_id)
 
-                while True:
-                    params = {
-                        "page": page,
-                        "count": count,
-                        "query": "",
-                        "cameraQuery": "",
-                        "nvrQuery": ""
-                    }
-                    resp = requests.get(url, headers=headers, params=params, timeout=30)
+                if not all_channels and total == 0:
+                    self.root.after(0, lambda: self._query_fail("未查询到通道数据"))
+                    return
 
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        if data.get("code") != 0:
-                            self.root.after(0, lambda m=data.get("msg", "未知错误"): self._query_fail(m))
-                            return
-
-                        inner = data.get("data", {})
-                        channels = inner.get("list", [])
-                        total = inner.get("total", 0)
-                        all_channels.extend(channels)
-
-                        # 更新界面状态提示
-                        self.root.after(0, lambda p=page: self.set_statusbar(f"正在加载通道第 {p} 页..."))
-
-                        # 判断是否已取完所有数据
-                        if len(channels) < count or len(all_channels) >= total:
-                            break
-                        page += 1
-                    else:
-                        msg = resp.json().get("msg", f"HTTP {resp.status_code}")
-                        self.root.after(0, lambda m=msg: self._query_fail(m))
-                        return
-
-                # 逐个查询全局通道，合并厂家/经纬度等字段
+                # 并发查询全局通道，合并厂家/经纬度等字段
                 try:
-                    merged_count = 0
-                    for dc in all_channels:
+                    def merge_one(dc):
                         dc_id = dc.get("id") or dc.get("gbId")
                         if not dc_id:
-                            continue
-                        one_url = f"{host}/api/common/channel/one"
-                        one_resp = requests.get(one_url, headers=headers,
-                                                params={"id": dc_id}, timeout=15)
-                        if one_resp.status_code == 200:
-                            one_data = one_resp.json()
-                            if one_data.get("code") == 0:
-                                gc = one_data.get("data")
-                                if gc and isinstance(gc, dict):
-                                    for fld in ("gbManufacturer", "gbLongitude", "gbLatitude",
-                                                "gbName", "gbCivilCode"):
-                                        if fld in gc and gc[fld] is not None:
-                                            dc[fld] = gc[fld]
-                                    merged_count += 1
-                    print(f"[DEBUG] 合并了 {merged_count}/{len(all_channels)} 条全局通道数据")
+                            return dc
+                        try:
+                            one_resp = requests.get(f"{host}/api/common/channel/one",
+                                                    headers=headers,
+                                                    params={"id": dc_id}, timeout=15)
+                            if one_resp.status_code == 200:
+                                od = one_resp.json()
+                                if od.get("code") == 0:
+                                    gc = od.get("data")
+                                    if gc and isinstance(gc, dict):
+                                        for fld in ("gbManufacturer", "gbLongitude", "gbLatitude",
+                                                    "gbName", "gbCivilCode"):
+                                            if fld in gc and gc[fld] is not None:
+                                                dc[fld] = gc[fld]
+                        except Exception:
+                            pass
+                        return dc
+
+                    with ThreadPoolExecutor(max_workers=self.max_workers) as ex:
+                        list(ex.map(merge_one, all_channels))
                 except Exception as e:
                     import traceback
                     print(f"[DEBUG] 查询全局通道异常: {e}")
@@ -959,21 +1156,34 @@ class MainApplication:
         threading.Thread(target=self._batch_update_region, args=(selected, new_region), daemon=True).start()
 
     def _batch_update_region(self, channels, new_region):
-        success = fail = 0
         host = self.server_host.get().strip().rstrip('/')
         headers = {"Accept": "*/*", "access-token": self.access_token, "Content-Type": "application/json"}
-        for idx, ch in enumerate(channels, 1):
+        total = len(channels)
+        done_count = [0]
+
+        def do_update(ch):
             updates = {"gbCivilCode": new_region, "civilCode": new_region}
             try:
                 body = self.build_channel_body(ch, updates)
                 resp = requests.post(f"{host}/api/common/channel/update", headers=headers, json=body, timeout=15)
                 if resp.status_code == 200 and resp.json().get("code") == 0:
+                    return True
+            except:
+                pass
+            return False
+
+        success = 0
+        fail = 0
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            futures = {executor.submit(do_update, ch): ch for ch in channels}
+            for future in as_completed(futures):
+                if future.result():
                     success += 1
                 else:
                     fail += 1
-            except:
-                fail += 1
-            self.root.after(0, lambda c=idx: self.set_statusbar(f"批量修改中: {c}/{len(channels)}"))
+                done_count[0] += 1
+                self.root.after(0, lambda c=done_count[0], t=total:
+                    self.set_statusbar(f"批量修改中: {c}/{t}"))
         self.root.after(0, lambda: self._batch_finished(success, fail))
 
     @staticmethod
@@ -1240,10 +1450,16 @@ class MainApplication:
             return
         if not messagebox.askyesno("确认", f"将导出 {len(selected_devices)} 个选中设备的全部通道，\n是否继续?"):
             return
+        # 默认文件名 = 设备名称
+        name_list = [d.get("name", f"设备{i+1}") for i, d in enumerate(selected_devices)]
+        default_name = "、".join(name_list[:3])
+        if len(name_list) > 3:
+            default_name += f"等{len(name_list)}个设备"
+        default_name += ".xlsx"
         file = filedialog.asksaveasfilename(defaultextension=".xlsx",
                                              filetypes=[("Excel", "*.xlsx")],
                                              title="导出选中通道",
-                                             initialfile="选中通道.xlsx")
+                                             initialfile=default_name)
         if not file:
             return
         self.set_statusbar("正在导出选中设备通道...")
@@ -1262,59 +1478,45 @@ class MainApplication:
                 device_name = dev.get("name", "")
                 self.root.after(0, lambda c=idx, d=device_name:
                     self.set_statusbar(f"导出中 ({c}/{total}): {d}"))
-                page = 1
-                while True:
-                    try:
-                        url = f"{host}/api/device/query/devices/{device_id}/channels"
-                        resp = requests.get(url, headers=headers, params={
-                            "page": page, "count": 100,
-                            "query": "", "cameraQuery": "", "nvrQuery": ""
-                        }, timeout=30)
-                        if resp.status_code == 200:
-                            data = resp.json()
-                            if data.get("code") == 0:
-                                channels = data.get("data", {}).get("list", [])
-                                # 合并全局通道数据
-                                for dc in channels:
-                                    dc_id = dc.get("id") or dc.get("gbId")
-                                    if dc_id:
-                                        try:
-                                            one = requests.get(
-                                                f"{host}/api/common/channel/one",
-                                                headers=headers,
-                                                params={"id": dc_id}, timeout=15)
-                                            if one.status_code == 200:
-                                                od = one.json()
-                                                if od.get("code") == 0:
-                                                    gc = od.get("data")
-                                                    if gc and isinstance(gc, dict):
-                                                        for f in ("gbManufacturer", "gbLongitude", "gbLatitude",
-                                                                  "gbName", "gbCivilCode"):
-                                                            if f in gc and gc[f] is not None:
-                                                                dc[f] = gc[f]
-                                        except Exception:
-                                            pass
-                                for ch in channels:
-                                    all_rows.append((
-                                        device_name,
-                                        device_id,
-                                        ch.get("name", ""),
-                                        "子目录" if ch.get("channelType") else "设备通道",
-                                        ch.get("civilCode", ""),
-                                        ch.get("gbLongitude", 0),
-                                        ch.get("gbLatitude", 0),
-                                        ch.get("gbManufacturer", ""),
-                                        ch.get("id", ""),
-                                    ))
-                                if len(channels) < 100:
-                                    break
-                                page += 1
-                            else:
-                                break
-                        else:
-                            break
-                    except Exception:
-                        break
+                try:
+                    channels, _ = self._concurrent_channel_query(device_id)
+                    # 并发合并全局通道数据
+                    def merge_one(dc):
+                        dc_id = dc.get("id") or dc.get("gbId")
+                        if not dc_id:
+                            return dc
+                        try:
+                            one = requests.get(f"{host}/api/common/channel/one",
+                                               headers=headers,
+                                               params={"id": dc_id}, timeout=15)
+                            if one.status_code == 200:
+                                od = one.json()
+                                if od.get("code") == 0:
+                                    gc = od.get("data")
+                                    if gc and isinstance(gc, dict):
+                                        for f in ("gbManufacturer", "gbLongitude", "gbLatitude",
+                                                  "gbName", "gbCivilCode"):
+                                            if f in gc and gc[f] is not None:
+                                                dc[f] = gc[f]
+                        except Exception:
+                            pass
+                        return dc
+                    with ThreadPoolExecutor(max_workers=self.max_workers) as ex:
+                        list(ex.map(merge_one, channels))
+                    for ch in channels:
+                        all_rows.append((
+                            device_name,
+                            device_id,
+                            ch.get("name", ""),
+                            "子目录" if ch.get("channelType") else "设备通道",
+                            ch.get("civilCode", ""),
+                            ch.get("gbLongitude", 0),
+                            ch.get("gbLatitude", 0),
+                            ch.get("gbManufacturer", ""),
+                            ch.get("id", ""),
+                        ))
+                except Exception:
+                    pass
             # 写入 Excel
             wb = Workbook()
             ws = wb.active
@@ -1390,81 +1592,83 @@ class MainApplication:
                          args=(file, updates_by_id), daemon=True).start()
 
     def _do_import_device(self, file, updates_by_id):
-        """批量提交导入的修改（直接查全局通道 API，不依赖本地缓存）"""
-        try:
-            host = self.server_host.get().strip().rstrip('/')
-            token = self.access_token
-            headers = {"Accept": "*/*", "access-token": token,
-                       "Content-Type": "application/json"}
-            success = fail = 0
-            total = len(updates_by_id)
-            for idx, (db_id, (new_name, new_civil, new_lon, new_lat, new_mfr)) in enumerate(
-                    updates_by_id.items(), 1):
-                self.root.after(0, lambda c=idx, t=total:
+        """批量提交导入的修改（并发8线程）"""
+        host = self.server_host.get().strip().rstrip('/')
+        token = self.access_token
+        headers = {"Accept": "*/*", "access-token": token,
+                   "Content-Type": "application/json"}
+        total = len(updates_by_id)
+        done_count = [0]
+        success = [0]
+        fail = [0]
+
+        def process_one(args):
+            db_id, (new_name, new_civil, new_lon, new_lat, new_mfr) = args
+            try:
+                one = requests.get(f"{host}/api/common/channel/one",
+                                   headers=headers,
+                                   params={"id": db_id}, timeout=15)
+                if one.status_code != 200:
+                    return False
+                od = one.json()
+                if od.get("code") != 0:
+                    return False
+                ch = od.get("data")
+                if not ch or not isinstance(ch, dict):
+                    return False
+            except Exception:
+                return False
+            updates = {}
+            if new_name and new_name != ch.get("gbName", ch.get("name", "")):
+                updates["gbName"] = new_name
+            if new_civil and new_civil != ch.get("gbCivilCode", ch.get("civilCode", "")):
+                updates["gbCivilCode"] = new_civil
+            if new_lon:
+                try:
+                    val = float(new_lon)
+                    old = float(ch.get("gbLongitude", 0) or 0)
+                    if abs(val - old) > 0.000001:
+                        updates["gbLongitude"] = val
+                except ValueError:
+                    pass
+            if new_lat:
+                try:
+                    val = float(new_lat)
+                    old = float(ch.get("gbLatitude", 0) or 0)
+                    if abs(val - old) > 0.000001:
+                        updates["gbLatitude"] = val
+                except ValueError:
+                    pass
+            if new_mfr and new_mfr != ch.get("gbManufacturer", ""):
+                updates["gbManufacturer"] = new_mfr
+            if not updates:
+                return True
+            try:
+                body = self.build_channel_body(ch, updates)
+                resp = requests.post(f"{host}/api/common/channel/update",
+                                     headers=headers, json=body, timeout=15)
+                if resp.status_code == 200 and resp.json().get("code") == 0:
+                    return True
+            except Exception:
+                pass
+            return False
+
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            futures = {executor.submit(process_one, item): item
+                       for item in updates_by_id.items()}
+            for future in as_completed(futures):
+                if future.result():
+                    success[0] += 1
+                else:
+                    fail[0] += 1
+                done_count[0] += 1
+                self.root.after(0, lambda c=done_count[0], t=total:
                     self.set_statusbar(f"导入中 ({c}/{t})..."))
-                # 从全局通道查询当前数据
-                try:
-                    one = requests.get(f"{host}/api/common/channel/one",
-                                       headers=headers,
-                                       params={"id": db_id}, timeout=15)
-                    if one.status_code != 200:
-                        fail += 1
-                        continue
-                    od = one.json()
-                    if od.get("code") != 0:
-                        fail += 1
-                        continue
-                    ch = od.get("data")
-                    if not ch or not isinstance(ch, dict):
-                        fail += 1
-                        continue
-                except Exception:
-                    fail += 1
-                    continue
-                updates = {}
-                if new_name and new_name != ch.get("gbName", ch.get("name", "")):
-                    updates["gbName"] = new_name
-                if new_civil and new_civil != ch.get("gbCivilCode", ch.get("civilCode", "")):
-                    updates["gbCivilCode"] = new_civil
-                if new_lon:
-                    try:
-                        val = float(new_lon)
-                        old = float(ch.get("gbLongitude", 0) or 0)
-                        if abs(val - old) > 0.000001:
-                            updates["gbLongitude"] = val
-                    except ValueError:
-                        pass
-                if new_lat:
-                    try:
-                        val = float(new_lat)
-                        old = float(ch.get("gbLatitude", 0) or 0)
-                        if abs(val - old) > 0.000001:
-                            updates["gbLatitude"] = val
-                    except ValueError:
-                        pass
-                if new_mfr and new_mfr != ch.get("gbManufacturer", ""):
-                    updates["gbManufacturer"] = new_mfr
-                if not updates:
-                    success += 1
-                    continue
-                try:
-                    body = self.build_channel_body(ch, updates)
-                    resp = requests.post(f"{host}/api/common/channel/update",
-                                         headers=headers, json=body, timeout=15)
-                    if resp.status_code == 200 and resp.json().get("code") == 0:
-                        success += 1
-                    else:
-                        fail += 1
-                except Exception:
-                    fail += 1
-            self.root.after(0, lambda: messagebox.showinfo(
-                "结果", f"成功: {success} 条\n失败: {fail} 条"))
-            self.root.after(0, lambda: self.set_statusbar(
-                f"导入完成: 成功 {success}, 失败 {fail}"))
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            self.root.after(0, lambda e=e: messagebox.showerror("导入异常", str(e)))
+
+        self.root.after(0, lambda: messagebox.showinfo(
+            "结果", f"成功: {success[0]} 条\n失败: {fail[0]} 条"))
+        self.root.after(0, lambda: self.set_statusbar(
+            f"导入完成: 成功 {success[0]}, 失败 {fail[0]}"))
 
     # ---------- 导出Excel ----------
     def export_excel(self):
