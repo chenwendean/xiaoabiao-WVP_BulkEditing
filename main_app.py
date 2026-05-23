@@ -3,6 +3,13 @@
 """
 主界面 - 通道查询、编辑、批量修改、Excel导入导出
 v7.0 - 新增设备列表选择，登录后自动查询全部国标设备
+
+Copyright (C) 2025 Xiaoabiao
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 """
 
 import tkinter as tk
