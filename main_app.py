@@ -486,6 +486,12 @@ class MainApplication:
                    command=lambda: self._win_import(win, channels, device_id, device_name)).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_row, text="批量修改区域编码",
                    command=lambda: self._win_batch_region(win, tree, check_vars, item_to_ch)).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_row, text="批量修改厂家",
+                   command=lambda: self._win_batch_manufacturer(win, tree, check_vars, item_to_ch)).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_row, text="批量修改经纬度",
+                   command=lambda: self._win_batch_lonlat(win, tree, check_vars, item_to_ch)).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_row, text="批量修改在线状态",
+                   command=lambda: self._win_batch_status(win, tree, check_vars, item_to_ch)).pack(side=tk.LEFT, padx=5)
         ttk.Label(btn_row, text="双击单元格修改", foreground="gray",
                   font=("Microsoft YaHei", 9)).pack(side=tk.RIGHT)
 
@@ -495,9 +501,9 @@ class MainApplication:
         frame.grid_rowconfigure(0, weight=1)
         frame.grid_columnconfigure(0, weight=1)
 
-        columns = ("☐", "序号", "通道名称", "通道类型", "区域编码", "经度", "纬度", "厂家", "数据库ID")
+        columns = ("☐", "序号", "通道名称", "通道类型", "在线状态", "区域编码", "经度", "纬度", "厂家", "数据库ID")
         tree = ttk.Treeview(frame, columns=columns, show="headings", height=20)
-        col_widths = [30, 40, 200, 80, 100, 80, 80, 120, 80]
+        col_widths = [30, 40, 200, 80, 60, 100, 80, 80, 120, 80]
         for col, w in zip(columns, col_widths):
             tree.heading(col, text=col)
             tree.column(col, width=w, anchor=tk.CENTER, minwidth=w)
@@ -530,12 +536,14 @@ class MainApplication:
         # 存储数据
         item_to_ch = {}
         check_vars = {}
+        
         for i, ch in enumerate(channels, 1):
             var = tk.BooleanVar(value=False)
             item = tree.insert("", tk.END, values=(
                 "☐", i,
                 ch.get("name", ""),
                 "子目录" if ch.get("channelType") else "设备通道",
+                ({"ON": "在线", "OFF": "离线"}.get(ch.get("status")) or ch.get("status") or ""),
                 ch.get("civilCode", ""),
                 ch.get("gbLongitude", 0),
                 ch.get("gbLatitude", 0),
@@ -592,34 +600,38 @@ class MainApplication:
                     return
                 upd = {"gbName": new_val}
                 fld = "名称"
-            elif col == "#5":  # 区域编码
+            elif col == "#6":  # 区域编码
                 if new_val == ch.get("civilCode", ""):
                     return
                 upd = {"gbCivilCode": new_val}
                 fld = "区域编码"
-            elif col == "#6":  # 经度
+            elif col == "#7":  # 经度
                 try:
                     nv = float(new_val)
+                    if not (-180 <= nv <= 180):
+                        raise ValueError("out_of_range")
                 except ValueError:
-                    messagebox.showerror("错误", "经度必须是数字", parent=win)
+                    messagebox.showerror("错误", "经度必须是数字（-180 ~ 180）", parent=win)
                     return
                 old = float(ch.get("gbLongitude", 0) or 0)
                 if abs(nv - old) < 0.000001:
                     return
                 upd = {"gbLongitude": nv}
                 fld = "经度"
-            elif col == "#7":  # 纬度
+            elif col == "#8":  # 纬度
                 try:
                     nv = float(new_val)
+                    if not (-90 <= nv <= 90):
+                        raise ValueError("out_of_range")
                 except ValueError:
-                    messagebox.showerror("错误", "纬度必须是数字", parent=win)
+                    messagebox.showerror("错误", "纬度必须是数字（-90 ~ 90）", parent=win)
                     return
                 old = float(ch.get("gbLatitude", 0) or 0)
                 if abs(nv - old) < 0.000001:
                     return
                 upd = {"gbLatitude": nv}
                 fld = "纬度"
-            elif col == "#8":  # 厂家
+            elif col == "#9":  # 厂家
                 if new_val == ch.get("gbManufacturer", ""):
                     return
                 upd = {"gbManufacturer": new_val}
@@ -650,7 +662,7 @@ class MainApplication:
 
         def on_dblclick(event):
             col = tree.identify_column(event.x)
-            if col in ("#1", "#2", "#4", "#9"):
+            if col in ("#1", "#2", "#4", "#5", "#10"):
                 return
             cancel_edit()
             it = tree.identify_row(event.y)
@@ -696,7 +708,7 @@ class MainApplication:
             wb = Workbook()
             ws = wb.active
             ws.title = "通道列表"
-            hdrs = ["设备名称", "设备ID", "通道名称", "通道类型", "区域编码",
+            hdrs = ["设备名称", "设备ID", "通道名称", "通道类型", "在线状态", "区域编码",
                     "经度", "纬度", "厂家", "数据库ID"]
             for c, h in enumerate(hdrs, 1):
                 cell = ws.cell(row=1, column=c, value=h)
@@ -707,12 +719,13 @@ class MainApplication:
                 row = [device_name, device_id,
                        ch.get("name", ""),
                        "子目录" if ch.get("channelType") else "设备通道",
+                       ({"ON": "在线", "OFF": "离线"}.get(ch.get("status")) or ch.get("status") or ""),
                        ch.get("civilCode", ""),
                        ch.get("gbLongitude", 0), ch.get("gbLatitude", 0),
                        ch.get("gbManufacturer", ""), ch.get("id", "")]
                 for j, v in enumerate(row, 1):
                     ws.cell(row=i + 1, column=j, value=v)
-            for i, w in enumerate([18, 24, 25, 10, 15, 10, 10, 15, 10], 1):
+            for i, w in enumerate([18, 24, 25, 10, 10, 15, 10, 10, 15, 10], 1):
                 ws.column_dimensions[ws.cell(1, i).column_letter].width = w
             wb.save(f)
             set_st(f"导出成功: {os.path.basename(f)}")
@@ -730,9 +743,9 @@ class MainApplication:
                 return
             excel_data = {}
             for row in ws.iter_rows(min_row=2, values_only=True):
-                if not row or len(row) < 9:
+                if not row or len(row) < 10:
                     continue
-                did = row[8]
+                did = row[9]
                 if not did:
                     continue
                 try:
@@ -741,10 +754,10 @@ class MainApplication:
                     continue
                 excel_data[did] = {
                     "name": str(row[2] or "").strip(),
-                    "civilCode": str(row[4] or "").strip(),
-                    "gbLongitude": str(row[5] or "").strip(),
-                    "gbLatitude": str(row[6] or "").strip(),
-                    "gbManufacturer": str(row[7] or "").strip(),
+                    "civilCode": str(row[5] or "").strip(),
+                    "gbLongitude": str(row[6] or "").strip(),
+                    "gbLatitude": str(row[7] or "").strip(),
+                    "gbManufacturer": str(row[8] or "").strip(),
                 }
             if not excel_data:
                 messagebox.showwarning("无数据", "Excel无有效数据", parent=win)
@@ -905,7 +918,7 @@ class MainApplication:
                     success[0] += 1
                     if ch and it:
                         ch["civilCode"] = new_region
-                        self.root.after(0, lambda i=it: tree.set(i, "#5", new_region))
+                        self.root.after(0, lambda i=it: tree.set(i, "#6", new_region))
                 else:
                     fail[0] += 1
                 done_count[0] += 1
@@ -915,6 +928,395 @@ class MainApplication:
             f"批量修改完成: 成功 {success[0]}, 失败 {fail[0]}"))
         self.root.after(0, lambda: messagebox.showinfo("结果",
             f"成功: {success[0]} 条\n失败: {fail[0]} 条", parent=win))
+
+    def _ask_manufacturer(self, parent, count):
+        """弹出自定义对话框，下拉列表选择或输入厂家"""
+        dialog = tk.Toplevel(parent)
+        dialog.title("批量修改厂家")
+        dialog.geometry("420x220")
+        dialog.resizable(False, False)
+        dialog.transient(parent)
+        dialog.grab_set()
+
+        dialog.update_idletasks()
+        x = parent.winfo_rootx() + (parent.winfo_width() - 420) // 2
+        y = parent.winfo_rooty() + (parent.winfo_height() - 220) // 2
+        dialog.geometry(f"+{x}+{y}")
+
+        result = [None]
+
+        ttk.Label(dialog, text=f"已选中 {count} 个通道\n请选择或输入厂家名称:",
+                  font=("Microsoft YaHei", 10)).pack(pady=(15, 5))
+
+        var = tk.StringVar()
+        combo = ttk.Combobox(dialog, textvariable=var, font=("Microsoft YaHei", 10),
+                             values=["HIKVISION", "Dahua", "Uniview", "Tiandy", "自定义..."],
+                             state="normal", width=30)
+        combo.pack(pady=5)
+        combo.current(0)
+
+        custom_frame = ttk.Frame(dialog)
+        custom_frame.pack(pady=5)
+        custom_label = ttk.Label(custom_frame, text="自定义:",
+                                 font=("Microsoft YaHei", 9))
+        custom_var = tk.StringVar()
+        custom_entry = ttk.Entry(custom_frame, textvariable=custom_var,
+                                 font=("Microsoft YaHei", 10), width=25)
+
+        def on_combo_select(event):
+            if var.get() == "自定义...":
+                custom_label.pack(side=tk.LEFT, padx=(0, 5))
+                custom_entry.pack(side=tk.LEFT)
+                custom_entry.focus_set()
+            else:
+                custom_label.pack_forget()
+                custom_entry.pack_forget()
+
+        combo.bind("<<ComboboxSelected>>", on_combo_select)
+
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(pady=(15, 10))
+
+        def on_ok():
+            val = var.get()
+            if val == "自定义...":
+                val = custom_var.get().strip()
+            if not val:
+                messagebox.showwarning("提示", "请输入厂家名称", parent=dialog)
+                return
+            result[0] = val
+            dialog.destroy()
+
+        ttk.Button(btn_frame, text="确定", command=on_ok).pack(side=tk.LEFT, padx=8)
+        ttk.Button(btn_frame, text="取消", command=dialog.destroy).pack(side=tk.LEFT, padx=8)
+
+        dialog.wait_window()
+        return result[0]
+
+    def _win_batch_manufacturer(self, win, tree, check_vars, item_to_ch):
+        """弹窗内批量修改厂家"""
+        checked = [it for it, var in check_vars.items() if var.get()]
+        if not checked:
+            messagebox.showwarning("提示", "请先勾选要修改的通道", parent=win)
+            return
+        mfr = self._ask_manufacturer(win, len(checked))
+        if not mfr:
+            return
+        if not messagebox.askyesno("确认",
+                f"将为选中的 {len(checked)} 个通道设置厂家为:\n'{mfr}'?\n\n确认修改?",
+                parent=win):
+            return
+        threading.Thread(target=self._win_do_batch_manufacturer,
+                         args=(win, checked, tree, mfr, item_to_ch), daemon=True).start()
+
+    def _win_do_batch_manufacturer(self, win, checked_items, tree, mfr, item_to_ch):
+        """实际执行批量修改厂家（并发）"""
+        host = self.server_host.get().strip().rstrip('/')
+        headers = {"Accept": "*/*", "access-token": self.access_token,
+                   "Content-Type": "application/json"}
+        total = len(checked_items)
+        done_count = [0]
+        success = [0]
+        fail = [0]
+
+        def do_update(it):
+            ch = item_to_ch.get(it)
+            if not ch:
+                return False, None, None
+            updates = {"gbManufacturer": mfr}
+            try:
+                body = self.build_channel_body(ch, updates)
+                resp = requests.post(f"{host}/api/common/channel/update",
+                                     headers=headers, json=body, timeout=15)
+                if resp.status_code == 200 and resp.json().get("code") == 0:
+                    return True, ch, it
+            except Exception:
+                pass
+            return False, None, None
+
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            futures = {executor.submit(do_update, it): it for it in checked_items}
+            for future in as_completed(futures):
+                ok, ch, it = future.result()
+                if ok:
+                    success[0] += 1
+                    if ch and it:
+                        ch["gbManufacturer"] = mfr
+                        self.root.after(0, lambda i=it: tree.set(i, "#9", mfr))
+                else:
+                    fail[0] += 1
+                done_count[0] += 1
+                self.root.after(0, lambda c=done_count[0], t=total:
+                    self.set_statusbar(f"批量修改中 ({c}/{t})..."))
+        self.root.after(0, lambda: self.set_statusbar(
+            f"批量修改完成: 成功 {success[0]}, 失败 {fail[0]}"))
+        self.root.after(0, lambda: messagebox.showinfo("结果",
+            f"成功: {success[0]} 条\n失败: {fail[0]} 条", parent=win))
+
+    def _win_do_batch_lonlat(self, win, checked_items, tree, lon, lat, item_to_ch):
+        """实际执行批量修改经纬度（并发）"""
+        host = self.server_host.get().strip().rstrip('/')
+        headers = {"Accept": "*/*", "access-token": self.access_token,
+                   "Content-Type": "application/json"}
+        total = len(checked_items)
+        done_count = [0]
+        success = [0]
+        fail = [0]
+
+        def do_update(it):
+            ch = item_to_ch.get(it)
+            if not ch:
+                return False, None, None
+            updates = {}
+            if lon is not None:
+                old = float(ch.get("gbLongitude", 0) or 0)
+                if abs(lon - old) >= 0.000001:
+                    updates["gbLongitude"] = lon
+            if lat is not None:
+                old = float(ch.get("gbLatitude", 0) or 0)
+                if abs(lat - old) >= 0.000001:
+                    updates["gbLatitude"] = lat
+            if not updates:
+                return True, ch, it
+            try:
+                body = self.build_channel_body(ch, updates)
+                resp = requests.post(f"{host}/api/common/channel/update",
+                                     headers=headers, json=body, timeout=15)
+                if resp.status_code == 200 and resp.json().get("code") == 0:
+                    return True, ch, it
+            except Exception:
+                pass
+            return False, None, None
+
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            futures = {executor.submit(do_update, it): it for it in checked_items}
+            for future in as_completed(futures):
+                ok, ch, it = future.result()
+                if ok:
+                    success[0] += 1
+                    if ch and it:
+                        if lon is not None:
+                            ch["gbLongitude"] = lon
+                            self.root.after(0, lambda i=it: tree.set(i, "#7", lon))
+                        if lat is not None:
+                            ch["gbLatitude"] = lat
+                            self.root.after(0, lambda i=it: tree.set(i, "#8", lat))
+                else:
+                    fail[0] += 1
+                done_count[0] += 1
+                self.root.after(0, lambda c=done_count[0], t=total:
+                    self.set_statusbar(f"批量修改中 ({c}/{t})..."))
+        self.root.after(0, lambda: self.set_statusbar(
+            f"批量修改完成: 成功 {success[0]}, 失败 {fail[0]}"))
+        self.root.after(0, lambda: messagebox.showinfo("结果",
+            f"成功: {success[0]} 条\n失败: {fail[0]} 条", parent=win))
+
+    def _ask_status(self, parent, count):
+        """弹出自定义对话框，选择在线状态"""
+        dialog = tk.Toplevel(parent)
+        dialog.title("批量修改在线状态")
+        dialog.geometry("360x160")
+        dialog.resizable(False, False)
+        dialog.transient(parent)
+        dialog.grab_set()
+
+        dialog.update_idletasks()
+        x = parent.winfo_rootx() + (parent.winfo_width() - 360) // 2
+        y = parent.winfo_rooty() + (parent.winfo_height() - 160) // 2
+        dialog.geometry(f"+{x}+{y}")
+
+        result = [None]
+
+        ttk.Label(dialog, text=f"已选中 {count} 个通道\n请选择要设置的在线状态:",
+                  font=("Microsoft YaHei", 10)).pack(pady=(15, 10))
+
+        var = tk.StringVar()
+        combo = ttk.Combobox(dialog, textvariable=var, font=("Microsoft YaHei", 10),
+                             values=["ON（在线）", "OFF（离线）"],
+                             state="readonly", width=20)
+        combo.pack(pady=5)
+        combo.current(0)
+
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(pady=(15, 10))
+
+        def on_ok():
+            val = var.get()
+            if val.startswith("ON"):
+                result[0] = "ON"
+            else:
+                result[0] = "OFF"
+            dialog.destroy()
+
+        ttk.Button(btn_frame, text="确定", command=on_ok).pack(side=tk.LEFT, padx=8)
+        ttk.Button(btn_frame, text="取消", command=dialog.destroy).pack(side=tk.LEFT, padx=8)
+
+        combo.bind("<<ComboboxSelected>>", lambda e: on_ok())
+
+        dialog.wait_window()
+        return result[0]
+
+    def _win_batch_status(self, win, tree, check_vars, item_to_ch):
+        """弹窗内批量修改通道在线状态"""
+        checked = [it for it, var in check_vars.items() if var.get()]
+        if not checked:
+            messagebox.showwarning("提示", "请先勾选要修改的通道", parent=win)
+            return
+        status = self._ask_status(win, len(checked))
+        if not status:
+            return
+        label = "在线" if status == "ON" else "离线"
+        if not messagebox.askyesno("确认",
+                f"将为选中的 {len(checked)} 个通道设置状态为:\n{label}?\n\n确认修改?",
+                parent=win):
+            return
+        threading.Thread(target=self._win_do_batch_status,
+                         args=(win, checked, tree, status, item_to_ch), daemon=True).start()
+
+    def _win_do_batch_status(self, win, checked_items, tree, status, item_to_ch):
+        """实际执行批量修改在线状态（并发）"""
+        host = self.server_host.get().strip().rstrip('/')
+        headers = {"Accept": "*/*", "access-token": self.access_token,
+                   "Content-Type": "application/json"}
+        total = len(checked_items)
+        done_count = [0]
+        success = [0]
+        fail = [0]
+
+        def do_update(it):
+            ch = item_to_ch.get(it)
+            if not ch:
+                return False, None, None
+            # 跳过已经是目标状态的通道
+            old = ch.get("status", "")
+            if old == status:
+                return True, ch, it
+            updates = {"gbStatus": status}
+            try:
+                body = self.build_channel_body(ch, updates)
+                resp = requests.post(f"{host}/api/common/channel/update",
+                                     headers=headers, json=body, timeout=15)
+                if resp.status_code == 200 and resp.json().get("code") == 0:
+                    return True, ch, it
+            except Exception:
+                pass
+            return False, None, None
+
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            futures = {executor.submit(do_update, it): it for it in checked_items}
+            for future in as_completed(futures):
+                ok, ch, it = future.result()
+                if ok:
+                    success[0] += 1
+                    if ch:
+                        ch["status"] = status
+                else:
+                    fail[0] += 1
+                done_count[0] += 1
+                self.root.after(0, lambda c=done_count[0], t=total:
+                    self.set_statusbar(f"批量修改中 ({c}/{t})..."))
+        self.root.after(0, lambda: self.set_statusbar(
+            f"批量修改完成: 成功 {success[0]}, 失败 {fail[0]}"))
+        self.root.after(0, lambda: messagebox.showinfo("结果",
+            f"成功: {success[0]} 条\n失败: {fail[0]} 条", parent=win))
+
+    def _ask_lonlat(self, parent, count):
+        """弹出自定义对话框，输入经度和纬度"""
+        dialog = tk.Toplevel(parent)
+        dialog.title("批量修改经纬度")
+        dialog.geometry("360x210")
+        dialog.resizable(False, False)
+        dialog.transient(parent)
+        dialog.grab_set()
+
+        dialog.update_idletasks()
+        x = parent.winfo_rootx() + (parent.winfo_width() - 360) // 2
+        y = parent.winfo_rooty() + (parent.winfo_height() - 210) // 2
+        dialog.geometry(f"+{x}+{y}")
+
+        result = [None]
+
+        ttk.Label(dialog, text=f"已选中 {count} 个通道\n请输入经纬度（留空表示不修改该字段）:",
+                  font=("Microsoft YaHei", 10)).pack(pady=(15, 10))
+
+        # 经度
+        lon_frame = ttk.Frame(dialog)
+        lon_frame.pack(pady=3)
+        ttk.Label(lon_frame, text="经度 (-180 ~ 180):", font=("Microsoft YaHei", 9),
+                  width=16, anchor=tk.E).pack(side=tk.LEFT)
+        lon_var = tk.StringVar()
+        lon_entry = ttk.Entry(lon_frame, textvariable=lon_var, font=("Microsoft YaHei", 10), width=18)
+        lon_entry.pack(side=tk.LEFT, padx=(5, 0))
+
+        # 纬度
+        lat_frame = ttk.Frame(dialog)
+        lat_frame.pack(pady=3)
+        ttk.Label(lat_frame, text="纬度 (-90 ~ 90):", font=("Microsoft YaHei", 9),
+                  width=16, anchor=tk.E).pack(side=tk.LEFT)
+        lat_var = tk.StringVar()
+        lat_entry = ttk.Entry(lat_frame, textvariable=lat_var, font=("Microsoft YaHei", 10), width=18)
+        lat_entry.pack(side=tk.LEFT, padx=(5, 0))
+
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(pady=(15, 10))
+
+        def on_ok():
+            lon_str = lon_var.get().strip()
+            lat_str = lat_var.get().strip()
+            if not lon_str and not lat_str:
+                messagebox.showwarning("提示", "请至少输入经度或纬度", parent=dialog)
+                return
+            lon_val = lat_val = None
+            if lon_str:
+                try:
+                    lon_val = float(lon_str)
+                    if not (-180 <= lon_val <= 180):
+                        raise ValueError
+                except ValueError:
+                    messagebox.showerror("错误", "经度必须是 -180 ~ 180 之间的数字", parent=dialog)
+                    return
+            if lat_str:
+                try:
+                    lat_val = float(lat_str)
+                    if not (-90 <= lat_val <= 90):
+                        raise ValueError
+                except ValueError:
+                    messagebox.showerror("错误", "纬度必须是 -90 ~ 90 之间的数字", parent=dialog)
+                    return
+            result[0] = (lon_val, lat_val)
+            dialog.destroy()
+
+        ttk.Button(btn_frame, text="确定", command=on_ok).pack(side=tk.LEFT, padx=8)
+        ttk.Button(btn_frame, text="取消", command=dialog.destroy).pack(side=tk.LEFT, padx=8)
+
+        lon_entry.bind("<Return>", lambda e: lat_entry.focus_set())
+        lat_entry.bind("<Return>", lambda e: on_ok())
+
+        dialog.wait_window()
+        return result[0]
+
+    def _win_batch_lonlat(self, win, tree, check_vars, item_to_ch):
+        """弹窗内批量修改经纬度"""
+        checked = [it for it, var in check_vars.items() if var.get()]
+        if not checked:
+            messagebox.showwarning("提示", "请先勾选要修改的通道", parent=win)
+            return
+        vals = self._ask_lonlat(win, len(checked))
+        if not vals:
+            return
+        lon, lat = vals
+        parts = []
+        if lon is not None:
+            parts.append(f"经度={lon}")
+        if lat is not None:
+            parts.append(f"纬度={lat}")
+        msg = "、".join(parts)
+        if not messagebox.askyesno("确认",
+                f"将为选中的 {len(checked)} 个通道设置\n{msg}?\n\n确认修改?",
+                parent=win):
+            return
+        threading.Thread(target=self._win_do_batch_lonlat,
+                         args=(win, checked, tree, lon, lat, item_to_ch), daemon=True).start()
 
     def _win_refresh(self, win, device_id, device_name,
                      tree, item_to_ch, check_vars, set_st):
@@ -988,6 +1390,7 @@ class MainApplication:
                 "☐", i,
                 ch.get("name", ""),
                 "子目录" if ch.get("channelType") else "设备通道",
+                ({"ON": "在线", "OFF": "离线"}.get(ch.get("status")) or ch.get("status") or ""),
                 ch.get("civilCode", ""),
                 ch.get("gbLongitude", 0),
                 ch.get("gbLatitude", 0),
@@ -1012,201 +1415,13 @@ class MainApplication:
             ch = item_to_ch.get(item)
             if ch:
                 tree.set(item, "#3", ch.get("name", ""))
-                tree.set(item, "#5", ch.get("civilCode", ""))
-                tree.set(item, "#6", ch.get("gbLongitude", 0))
-                tree.set(item, "#7", ch.get("gbLatitude", 0))
-                tree.set(item, "#8", ch.get("gbManufacturer", ""))
+                tree.set(item, "#5", ({"ON": "在线", "OFF": "离线"}.get(ch.get("status")) or ch.get("status") or ""))
+                tree.set(item, "#6", ch.get("civilCode", ""))
+                tree.set(item, "#7", ch.get("gbLongitude", 0))
+                tree.set(item, "#8", ch.get("gbLatitude", 0))
+                tree.set(item, "#9", ch.get("gbManufacturer", ""))
 
-    # ========== 通道查询 ==========
 
-    def do_query_channels(self):
-        if not self.access_token:
-            messagebox.showwarning("警告", "请先登录")
-            return
-        if not self.selected_device_id:
-            messagebox.showwarning("提示", "请先从左侧设备列表中选择一个设备")
-            return
-        device_id = self.selected_device_id
-        self.set_statusbar(f"正在查询设备 {device_id} 的全部通道...")
-        self.query_btn.configure(state=tk.DISABLED, text="查询中...")
-        self.cancel_edit()
-
-        def task():
-            try:
-                host = self.server_host.get().strip().rstrip('/')
-                headers = {
-                    "Accept": "*/*",
-                    "access-token": self.access_token,
-                    "Content-Type": "application/x-www-form-urlencoded"
-                }
-                all_channels, total = self._concurrent_channel_query(device_id)
-
-                if not all_channels and total == 0:
-                    self.root.after(0, lambda: self._query_fail("未查询到通道数据"))
-                    return
-
-                # 并发查询全局通道，合并厂家/经纬度等字段
-                try:
-                    def merge_one(dc):
-                        dc_id = dc.get("id") or dc.get("gbId")
-                        if not dc_id:
-                            return dc
-                        try:
-                            one_resp = requests.get(f"{host}/api/common/channel/one",
-                                                    headers=headers,
-                                                    params={"id": dc_id}, timeout=15)
-                            if one_resp.status_code == 200:
-                                od = one_resp.json()
-                                if od.get("code") == 0:
-                                    gc = od.get("data")
-                                    if gc and isinstance(gc, dict):
-                                        for fld in ("gbManufacturer", "gbLongitude", "gbLatitude",
-                                                    "gbName", "gbCivilCode"):
-                                            if fld in gc and gc[fld] is not None:
-                                                dc[fld] = gc[fld]
-                        except Exception:
-                            pass
-                        return dc
-
-                    with ThreadPoolExecutor(max_workers=self.max_workers) as ex:
-                        list(ex.map(merge_one, all_channels))
-                except Exception as e:
-                    import traceback
-                    print(f"[DEBUG] 查询全局通道异常: {e}")
-                    traceback.print_exc()
-
-                self.all_channels = all_channels
-                self.total_channels = total
-                self.root.after(0, lambda: self._query_success(all_channels, total, device_id))
-
-            except Exception as e:
-                self.root.after(0, lambda e=e: self._query_fail(str(e)))
-
-        threading.Thread(target=task, daemon=True).start()
-
-    def _query_success(self, channels, total, device_id):
-        self.query_btn.configure(state=tk.NORMAL, text=" 查询通道")
-        self.tree.delete(*self.tree.get_children())
-        self.item_to_channel.clear()
-        self.check_vars.clear()
-        self.select_all_var.set(False)
-
-        for i, ch in enumerate(channels, 1):
-            db_id = ch.get("id")
-            ch_type = ch.get("channelType", 0)
-            type_text = "子目录" if ch_type else "设备通道"
-            var = tk.BooleanVar(value=False)
-            values = ("☐", i, ch.get("deviceId", ""), ch.get("name", ""), type_text, ch.get("civilCode", ""), ch.get("gbLongitude", 0), ch.get("gbLatitude", 0), ch.get("gbManufacturer", ""), ch.get("id", ""))
-            item = self.tree.insert("", tk.END, values=values)
-            self.item_to_channel[item] = ch
-            self.check_vars[item] = var
-            var.trace_add("write", lambda *args, it=item: self.update_check_display(it))
-
-        self.page_info_var.set(f"共 {total} 条")
-        self.set_statusbar(f"查询成功 - 设备 {device_id} 下共 {total} 个通道")
-        self.update_ui_state()
-
-    def _query_fail(self, msg):
-        self.query_btn.configure(state=tk.NORMAL, text=" 查询通道")
-        self.set_statusbar(f"查询失败: {msg}")
-        messagebox.showerror("查询失败", msg)
-
-    # ---------- 复选框 ----------
-    def update_check_display(self, item):
-        var = self.check_vars.get(item)
-        if var:
-            self.tree.set(item, "#1", "☑" if var.get() else "☐")
-
-    def on_checkbox_click(self, event):
-        if self.tree.identify_column(event.x) != "#1":
-            return
-        item = self.tree.identify_row(event.y)
-        if not item:
-            return
-        var = self.check_vars.get(item)
-        if var:
-            var.set(not var.get())
-            self.update_select_all_state()
-
-    def toggle_select_all(self):
-        state = self.select_all_var.get()
-        for var in self.check_vars.values():
-            var.set(state)
-
-    def update_select_all_state(self):
-        if not self.check_vars:
-            self.select_all_var.set(False)
-            return
-        all_checked = all(v.get() for v in self.check_vars.values())
-        self.select_all_var.set(all_checked)
-
-    def get_selected_channels(self):
-        return [self.item_to_channel[it] for it, var in self.check_vars.items()
-                if var.get() and it in self.item_to_channel]
-
-    # ---------- 批量修改区域编码 ----------
-    def batch_modify_region(self):
-        selected = self.get_selected_channels()
-        if not selected:
-            messagebox.showwarning("提示", "请至少勾选一个通道")
-            return
-        new_region = simpledialog.askstring("批量修改区域编码",
-                                            f"已选中 {len(selected)} 个通道\n请输入新的区域编码:",
-                                            parent=self.root)
-        if not new_region or not new_region.strip():
-            return
-        new_region = new_region.strip()
-        if not messagebox.askyesno("确认", f"将为选中的 {len(selected)} 个通道设置区域编码为:\n'{new_region}'?\n\n确认修改?"):
-            return
-        self.batch_region_btn.configure(state=tk.DISABLED)
-        self.set_statusbar("正在批量修改区域编码...")
-        threading.Thread(target=self._batch_update_region, args=(selected, new_region), daemon=True).start()
-
-    def _batch_update_region(self, channels, new_region):
-        host = self.server_host.get().strip().rstrip('/')
-        headers = {"Accept": "*/*", "access-token": self.access_token, "Content-Type": "application/json"}
-        total = len(channels)
-        done_count = [0]
-
-        def do_update(ch):
-            updates = {"gbCivilCode": new_region, "civilCode": new_region}
-            try:
-                body = self.build_channel_body(ch, updates)
-                resp = requests.post(f"{host}/api/common/channel/update", headers=headers, json=body, timeout=15)
-                if resp.status_code == 200 and resp.json().get("code") == 0:
-                    return True
-            except:
-                pass
-            return False
-
-        success = 0
-        fail = 0
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = {executor.submit(do_update, ch): ch for ch in channels}
-            for future in as_completed(futures):
-                if future.result():
-                    success += 1
-                else:
-                    fail += 1
-                done_count[0] += 1
-                self.root.after(0, lambda c=done_count[0], t=total:
-                    self.set_statusbar(f"批量修改中: {c}/{t}"))
-        self.root.after(0, lambda: self._batch_finished(success, fail))
-
-    @staticmethod
-    def _val(v, default=""):
-        """取非None的值，None转默认值"""
-        return v if v is not None else default
-
-    @staticmethod
-    def _num(v, default=0):
-        """取非None的数值"""
-        if v is None:
-            return default
-        try:
-            return float(v)
-        except (ValueError, TypeError):
-            return default
 
     def build_channel_body(self, channel, updates):
         """构建 body：gbId + 有值的已有字段 + 要更新的字段
@@ -1216,7 +1431,6 @@ class MainApplication:
         """
         # gbId：兼容设备通道(id)和全局通道(gbId)两种字段名
         gb_id_val = channel.get("id") or channel.get("gbId") or 0
-        print(f"[DEBUG] build_channel_body: gbId={gb_id_val!r} (type={type(gb_id_val).__name__})")
         body = {"gbId": gb_id_val}
         # 字段映射：(body里的key, channel里的key, 默认值)
         field_map = [
@@ -1271,162 +1485,7 @@ class MainApplication:
             if val not in (None, "", 0, 0.0):
                 body[body_key] = val
         body.update(updates)
-        print(f"[DEBUG] build_channel_body 完成({len(body)}个字段): body={body}")
         return body
-
-    def do_update(self, channel, updates, new_value, item, column):
-        try:
-            host = self.server_host.get().strip().rstrip('/')
-            headers = {"Accept": "*/*", "access-token": self.access_token, "Content-Type": "application/json"}
-            body = self.build_channel_body(channel, updates)
-            url = f"{host}/api/common/channel/update"
-            print(f"[DEBUG] ===== 开始修改通道 =====")
-            print(f"[DEBUG] 请求URL: {url}")
-            print(f"[DEBUG] 更新的字段: {updates}")
-            print(f"[DEBUG] 完整body: {body}")
-            resp = requests.post(url, headers=headers, json=body, timeout=15)
-            print(f"[DEBUG] 响应状态码: {resp.status_code}")
-            print(f"[DEBUG] 响应内容: {resp.text}")
-            
-            if resp.status_code == 200:
-                resp_data = resp.json()
-                if resp_data.get("code") == 0:
-                    # 更新树显示
-                    self.root.after(0, lambda: self.tree.set(item, column, new_value))
-                    # 更新本地 channel dict
-                    dc = self.item_to_channel.get(item)
-                    if dc:
-                        for k, v in updates.items():
-                            dc[k] = v
-                    self.root.after(0, lambda: self.set_statusbar("修改成功"))
-                else:
-                    msg = resp_data.get("msg", f"code={resp_data.get('code')}")
-                    self.root.after(0, lambda m=msg: messagebox.showerror("修改失败", m))
-            else:
-                msg = f"HTTP {resp.status_code}"
-                try:
-                    msg = resp.json().get("msg", msg)
-                except:
-                    pass
-                self.root.after(0, lambda m=msg: messagebox.showerror("修改失败", m))
-        except Exception as e:
-            import traceback
-            print(f"[DEBUG] 修改异常: {e}")
-            traceback.print_exc()
-            self.root.after(0, lambda e=e: messagebox.showerror("修改异常", str(e)))
-
-    def _batch_finished(self, success, fail):
-        self.batch_region_btn.configure(state=tk.NORMAL)
-        self.set_statusbar(f"批量修改完成: 成功 {success}, 失败 {fail}")
-        messagebox.showinfo("结果", f"成功: {success}\n失败: {fail}")
-        if success > 0:
-            self.do_query_channels()
-
-    # ---------- 双击编辑 ----------
-    def on_double_click(self, event):
-        col = self.tree.identify_column(event.x)
-        if col == "#1":
-            return
-        if self.edit_entry:
-            self.save_edit()
-        item = self.tree.identify_row(event.y)
-        if not item or col not in ("#4", "#6", "#7", "#8", "#9"):
-            return
-        self.edit_item = item
-        self.edit_column = col
-        value = self.tree.set(item, col)
-        bbox = self.tree.bbox(item, col)
-        if not bbox:
-            return
-        x, y, w, h = bbox
-        self.edit_entry = tk.Entry(self.tree, font=("Microsoft YaHei", 9))
-        self.edit_entry.place(x=x, y=y, width=w, height=h)
-        self.edit_entry.insert(0, value)
-        self.edit_entry.select_range(0, tk.END)
-        self.edit_entry.focus_set()
-        self.edit_entry.bind("<Return>", lambda e: self.save_edit())
-        self.edit_entry.bind("<FocusOut>", self.on_focus_out)
-
-    def on_focus_out(self, event):
-        if self.edit_entry:
-            self.root.after(100, self.save_edit)
-
-    def save_edit(self):
-        if not self.edit_entry:
-            return
-        new_value = self.edit_entry.get().strip()
-        item, col = self.edit_item, self.edit_column
-        self.cancel_edit()
-        if not item or not new_value:
-            return
-        channel = self.item_to_channel.get(item)
-        if not channel:
-            return
-        if col == "#4":
-            old = channel.get("name", "")
-            if new_value == old:
-                return
-            updates = {"gbName": new_value}
-            field = "名称"
-        elif col == "#6":
-            old = channel.get("civilCode", "")
-            if new_value == old:
-                return
-            updates = {"gbCivilCode": new_value}
-            field = "区域编码"
-        elif col == "#7":
-            try:
-                new_val = float(new_value)
-            except ValueError:
-                self.root.after(0, lambda: messagebox.showerror("错误", "经度必须是数字"))
-                return
-            old = channel.get("gbLongitude", 0)
-            if old == "" or old is None:
-                old = 0
-            try:
-                old = float(old)
-            except (ValueError, TypeError):
-                old = 0.0
-            if abs(new_val - old) < 0.000001:
-                return
-            updates = {"gbLongitude": new_val}
-            field = "经度"
-        elif col == "#8":
-            try:
-                new_val = float(new_value)
-            except ValueError:
-                self.root.after(0, lambda: messagebox.showerror("错误", "纬度必须是数字"))
-                return
-            old = channel.get("gbLatitude", 0)
-            if old == "" or old is None:
-                old = 0
-            try:
-                old = float(old)
-            except (ValueError, TypeError):
-                old = 0.0
-            if abs(new_val - old) < 0.000001:
-                return
-            updates = {"gbLatitude": new_val}
-            field = "纬度"
-        else:
-            old = channel.get("gbManufacturer", "")
-            if old is None:
-                old = ""
-            if new_value == old:
-                return
-            updates = {"gbManufacturer": new_value}
-            field = "厂家"
-        if not messagebox.askyesno("确认", f"将 {field} 从 '{old}' 改为 '{new_value}'?"):
-            return
-        threading.Thread(target=self.do_update, args=(channel, updates, new_value, item, col), daemon=True).start()
-
-    def cancel_edit(self):
-        if self.edit_entry:
-            self.edit_entry.destroy()
-            self.edit_entry = None
-            self.edit_item = None
-            self.edit_column = None
-
 
 
     # ---------- 导出选中设备的所有通道 ----------
@@ -1677,142 +1736,7 @@ class MainApplication:
         self.root.after(0, lambda: self.set_statusbar(
             f"导入完成: 成功 {success[0]}, 失败 {fail[0]}"))
 
-    # ---------- 导出Excel ----------
-    def export_excel(self):
-        if not self.all_channels:
-            messagebox.showwarning("提示", "通道列表为空")
-            return
-        if not HAS_OPENPYXL:
-            messagebox.showerror("缺少库", "请安装 openpyxl: pip install openpyxl")
-            return
-        default_name = f"{self.selected_device_name or '通道列表'}.xlsx"
-        file = filedialog.asksaveasfilename(defaultextension=".xlsx",
-                                             filetypes=[("Excel", "*.xlsx")],
-                                             title="导出通道列表",
-                                             initialfile=default_name)
-        if not file:
-            return
-        try:
-            wb = Workbook()
-            ws = wb.active
-            ws.title = "通道列表"
-            headers = ["序号", "设备ID", "名称", "通道类型", "区域编码", "经度", "纬度", "厂家", "数据库ID"]
-            for c, h in enumerate(headers, 1):
-                cell = ws.cell(row=1, column=c, value=h)
-                cell.fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
-                cell.font = Font(color="FFFFFF", bold=True)
-                cell.alignment = Alignment(horizontal="center")
-            for i, ch in enumerate(self.all_channels, 1):
-                row = [i, ch.get("deviceId", ""), ch.get("name", ""),
-                       "子目录" if ch.get("channelType") else "设备通道",
-                       ch.get("civilCode", ""), ch.get("gbLongitude", 0), ch.get("gbLatitude", 0), ch.get("gbManufacturer", ""), ch.get("id", "")]
-                for j, v in enumerate(row, 1):
-                    ws.cell(row=i+1, column=j, value=v)
-            for i, w in enumerate([6, 22, 25, 10, 15, 10, 10, 15, 10], 1):
-                ws.column_dimensions[ws.cell(1, i).column_letter].width = w
-            wb.save(file)
-            self.set_statusbar(f"导出成功: {os.path.basename(file)}")
-            messagebox.showinfo("成功", f"已导出到:\n{file}")
-        except Exception as e:
-            messagebox.showerror("失败", str(e))
 
-    # ---------- 导入Excel（带进度条）----------
-    def import_excel(self):
-        if not self.access_token:
-            messagebox.showwarning("警告", "请先登录")
-            return
-        if not HAS_OPENPYXL:
-            messagebox.showerror("缺少库", "请安装 openpyxl: pip install openpyxl")
-            return
-        if not self.all_channels:
-            messagebox.showwarning("提示", "请先查询通道再导入")
-            return
-        file = filedialog.askopenfilename(title="选择修改后的Excel", filetypes=[("Excel", "*.xlsx")])
-        if not file:
-            return
-        try:
-            wb = load_workbook(file)
-            ws = wb.active
-        except Exception as e:
-            messagebox.showerror("读取失败", str(e))
-            return
-        excel = {}
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            if len(row) < 9:
-                continue
-            did = row[8]
-            if not did:
-                continue
-            try:
-                did = int(did)
-            except:
-                continue
-            excel[did] = {"name": str(row[2] or "").strip(), "civilCode": str(row[4] or "").strip(), "gbLongitude": str(row[5] or "").strip(), "gbLatitude": str(row[6] or "").strip(), "gbManufacturer": str(row[7] or "").strip()}
-        if not excel:
-            messagebox.showwarning("无数据", "Excel无有效数据")
-            return
-        tasks = []
-        for ch in self.all_channels:
-            if ch["id"] in excel:
-                n = excel[ch["id"]]["name"]
-                c = excel[ch["id"]]["civilCode"]
-                lo = excel[ch["id"]]["gbLongitude"]
-                la = excel[ch["id"]]["gbLatitude"]
-                mf = excel[ch["id"]]["gbManufacturer"]
-                if (n != ch.get("name", "") or c != ch.get("civilCode", "") or
-                    (lo and str(lo) != str(ch.get("gbLongitude", 0))) or
-                    (la and str(la) != str(ch.get("gbLatitude", 0))) or
-                    mf != ch.get("gbManufacturer", "")):
-                    tasks.append((ch, n, c, lo, la, mf))
-        if not tasks:
-            messagebox.showinfo("提示", "没有需要修改的数据")
-            return
-        if not messagebox.askyesno("确认", f"检测到 {len(tasks)} 条修改，是否继续?"):
-            return
-        self.progress = ProgressDialog(self.root, "正在导入修改", len(tasks))
-        self.import_btn.configure(state=tk.DISABLED)
-        threading.Thread(target=self.batch_excel_update, args=(tasks,), daemon=True).start()
-
-    def batch_excel_update(self, tasks):
-        success = fail = 0
-        host = self.server_host.get().strip().rstrip('/')
-        headers = {"Accept": "*/*", "access-token": self.access_token, "Content-Type": "application/json"}
-        total = len(tasks)
-        for i, (ch, nn, nc, lo, la, mf) in enumerate(tasks, 1):
-            if self.progress and self.progress.is_cancelled():
-                break
-            upd = {}
-            if nn != ch.get("name", ""):
-                upd["gbName"] = nn
-            if nc != ch.get("civilCode", ""):
-                upd["gbCivilCode"] = nc
-            if lo and str(lo) != str(ch.get("gbLongitude", 0)):
-                try:
-                    val = float(lo)
-                    upd["gbLongitude"] = val
-                except ValueError:
-                    pass
-            if la and str(la) != str(ch.get("gbLatitude", 0)):
-                try:
-                    val = float(la)
-                    upd["gbLatitude"] = val
-                except ValueError:
-                    pass
-            if mf != ch.get("gbManufacturer", ""):
-                upd["gbManufacturer"] = mf
-            try:
-                body = self.build_channel_body(ch, upd)
-                resp = requests.post(f"{host}/api/common/channel/update", headers=headers, json=body, timeout=15)
-                if resp.status_code == 200 and resp.json().get("code") == 0:
-                    success += 1
-                else:
-                    fail += 1
-            except:
-                fail += 1
-            self.root.after(0, lambda c=i, t=total: self.progress.update(c, t, f"正在处理 {c}/{t}"))
-        self.root.after(0, self.progress.close)
-        self.root.after(0, lambda: self._batch_finished(success, fail))
-        self.root.after(0, lambda: self.import_btn.configure(state=tk.NORMAL))
 
     # ---------- 退出 ----------
     def logout(self):
@@ -1820,5 +1744,4 @@ class MainApplication:
             self.root.destroy()
 
     def on_close(self):
-        self.cancel_edit()
         self.root.destroy()
