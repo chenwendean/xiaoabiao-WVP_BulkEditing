@@ -3,13 +3,6 @@
 """
 WVP国标平台 - 通道管理工具 v1.0
 程序入口，负责显示登录窗口，登录成功后启动主界面
-
-Copyright (C) 2025 Xiaoabiao
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
 """
 
 import tkinter as tk
