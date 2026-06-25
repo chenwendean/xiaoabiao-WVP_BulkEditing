@@ -1,14 +1,16 @@
 <Project Sdk="Microsoft.NET.Sdk">
+
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows</TargetFramework>
-    <UseWindowsForms>true</UseWindowsForms>
+    <TargetFramework>net6.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
-    <ApplicationHighDpiMode>SystemAware</ApplicationHighDpiMode>
-    <RootNamespace>WVPWinForm</RootNamespace>
+    <ApplicationIcon>..\XYY.ico</ApplicationIcon>
   </PropertyGroup>
+
   <ItemGroup>
-    <PackageReference Include="ClosedXML" Version="0.102.2" />
+    <Content Include="..\XYY.ico" />
   </ItemGroup>
+
 </Project>
