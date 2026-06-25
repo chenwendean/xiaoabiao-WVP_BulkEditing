@@ -146,3 +146,209 @@ class MainApplication:
         statusbar.pack(side=tk.BOTTOM, fill=tk.X)
 
         self.update_ui_state()
+
+    # ---------- UI 状态 ----------
+    def update_ui_state(self):
+        pass
+
+    def set_statusbar(self, msg):
+        self.statusbar_var.set(f"{msg}  [{datetime.now().strftime('%H:%M:%S')}]")
+
+    def _show_progress(self, title, total):
+        if self.progress:
+            try:
+                self.progress.close()
+            except:
+                pass
+        self.progress = ProgressDialog(self.root, title, total)
+
+    def _close_progress(self):
+        if self.progress:
+            try:
+                self.progress.close()
+            except:
+                pass
+            self.progress = None
+
+    def set_max_workers(self):
+        val = simpledialog.askinteger("并发设置",
+            f"当前并发线程数: {self.max_workers}\n请输入新的数值（1-32）:",
+            initialvalue=self.max_workers, minvalue=1, maxvalue=32, parent=self.root)
+        if val:
+            self.max_workers = val
+            self.thread_btn.configure(text=f"并发: {self.max_workers}")
+            self.set_statusbar(f"并发线程数已设为 {self.max_workers}")
+
+    # ---------- 并发分页查询通道 ----------
+    def _concurrent_channel_query(self, device_id, page_size=100, progress=None):
+        host = self.server_host.get().strip().rstrip('/')
+        token = self.access_token
+        headers = {"Accept": "*/*", "access-token": token}
+        url = f"{host}/api/device/query/devices/{device_id}/channels"
+        base_params = {"query": "", "cameraQuery": "", "nvrQuery": ""}
+
+        if progress:
+            progress(0, 1, "正在获取总页数...")
+
+        try:
+            r = requests.get(url, headers=headers, params={
+                **base_params, "page": 1, "count": page_size}, timeout=30)
+            if r.status_code != 200:
+                return [], 0
+            data = r.json()
+            if data.get("code") != 0:
+                return [], 0
+            inner = data.get("data", {})
+            first_batch = inner.get("list", [])
+            total = inner.get("total", 0) or len(first_batch)
+        except Exception:
+            return [], 0
+
+        if total <= page_size:
+            if progress:
+                progress(1, 1, f"查询完成，共 {total} 个通道")
+            return first_batch, total
+
+        total_pages = (total + page_size - 1) // page_size
+        pages_list = {1: first_batch}
+        page_range = range(2, total_pages + 1)
+
+        if progress:
+            progress(0, total_pages, f"共 {total_pages} 页，正在并发查询...")
+
+        def fetch_page(pg):
+            try:
+                resp = requests.get(url, headers=headers, params={
+                    **base_params, "page": pg, "count": page_size}, timeout=30)
+                if resp.status_code == 200:
+                    d = resp.json()
+                    if d.get("code") == 0:
+                        return pg, d.get("data", {}).get("list", [])
+            except Exception:
+                pass
+            return pg, []
+
+        fetched = [len(first_batch)]
+        done = [1]
+        with ThreadPoolExecutor(max_workers=self.max_workers) as ex:
+            fut_map = {ex.submit(fetch_page, p): p for p in page_range}
+            for fut in as_completed(fut_map):
+                pg, lst = fut.result()
+                pages_list[pg] = lst
+                fetched[0] += len(lst)
+                done[0] += 1
+                if progress:
+                    progress(fetched[0], total,
+                        f"正在查询 ({fetched[0]}/{total} 个通道)...")
+
+        all_channels = []
+        for pg in sorted(pages_list):
+            all_channels.extend(pages_list[pg])
+
+        if progress:
+            progress(total, total, f"查询完成，共 {total} 个通道")
+        return all_channels, total
+
+    # ========== 设备列表相关 ==========
+
+    def do_query_devices(self):
+        if not self.access_token:
+            messagebox.showwarning("警告", "请先登录")
+            return
+        self.set_statusbar("正在查询全部国标设备...")
+        self.dev_count_var.set("查询中...")
+        host = self.server_host.get().strip().rstrip('/')
+        token = self.access_token
+
+        def task():
+            nonlocal host, token
+            try:
+                url = f"{host}/api/device/query/devices"
+                headers = {
+                    "Accept": "*/*",
+                    "access-token": token,
+                    "Content-Type": "application/x-www-form-urlencoded"
+                }
+                all_devices = []
+                page = 1
+                count = 100
+                total = 0
+
+                while True:
+                    params = {
+                        "page": page,
+                        "count": count,
+                        "query": "",
+                        "status": ""
+                    }
+                    resp = requests.get(url, headers=headers, params=params, timeout=30)
+
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if data.get("code") != 0:
+                            self.root.after(0, lambda m=data.get("msg", "未知错误"): self._devices_fail(m))
+                            return
+
+                        inner = data.get("data", {})
+                        devices = inner.get("list", [])
+                        total = inner.get("total", 0)
+                        all_devices.extend(devices)
+
+                        self.root.after(0, lambda p=page: self.set_statusbar(f"正在加载设备第 {p} 页..."))
+
+                        if len(devices) < count or len(all_devices) >= total:
+                            break
+                        page += 1
+                    else:
+                        msg = resp.json().get("msg", f"HTTP {resp.status_code}")
+                        self.root.after(0, lambda m=msg: self._devices_fail(m))
+                        return
+
+                self.all_devices = all_devices
+                self.root.after(0, lambda: self._devices_success(all_devices, total))
+
+            except Exception as e:
+                self.root.after(0, lambda e=e: self._devices_fail(str(e)))
+
+        threading.Thread(target=task, daemon=True).start()
+
+    def _devices_success(self, devices, total):
+        self.dev_tree.delete(*self.dev_tree.get_children())
+        self.dev_check_vars.clear()
+        self.dev_count_var.set(f"设备数: {total}")
+
+        for dev in devices:
+            device_id = dev.get("deviceId", "")
+            name = dev.get("name", "")
+            online = "ON" if dev.get("onLine") else "OFF"
+            model = dev.get("model", dev.get("gbModel", ""))
+            mfr = dev.get("manufacturer", dev.get("gbManufacturer", ""))
+            var = tk.BooleanVar(value=False)
+            values = ("☐", device_id, name, online, model, mfr)
+            item = self.dev_tree.insert("", tk.END, values=values)
+            self.dev_check_vars[item] = var
+
+        self.set_statusbar(f"查询成功 - 共 {total} 个国标设备")
+        self.update_ui_state()
+
+    def _update_dev_header(self):
+        if not self.dev_check_vars:
+            return
+        all_checked = all(var.get() for var in self.dev_check_vars.values())
+        any_checked = any(var.get() for var in self.dev_check_vars.values())
+        if all_checked:
+            self.dev_tree.heading("#1", text="☑")
+        elif any_checked:
+            self.dev_tree.heading("#1", text="☐")
+        else:
+            self.dev_tree.heading("#1", text="☐")
+
+    def toggle_dev_select_all(self):
+        if not self.dev_check_vars:
+            return
+        all_checked = all(var.get() for var in self.dev_check_vars.values())
+        new_state = not all_checked
+        for item, var in self.dev_check_vars.items():
+            var.set(new_state)
+            self.dev_tree.set(item, "#1", "☑" if new_state else "☐")
+        self._update_dev_header()
