@@ -29,3 +29,16 @@ env/
 # OS
 Thumbs.db
 .DS_Store
+
+# Reasonix / CodeGraph tooling
+.codegraph/
+.reasonix/
+reasonix.toml
+desktop-topic-*.json
+*.db-shm
+*.db-wal
+daemon.log
+daemon.pid
+
+# Build artifacts (binary)
+*.exe
