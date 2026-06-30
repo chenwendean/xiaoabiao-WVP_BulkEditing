@@ -699,7 +699,8 @@ class MainApplication:
             ws.title = "通道列表"
             hdrs = ["设备名称", "设备ID", "通道名称", "通道类型", "区域编码",
                     "经度", "纬度", "厂家", "数据库ID",
-                    "设备型号", "设备归属", "地址", "密码", "国标编码"]
+                    "设备型号", "设备归属", "地址", "密码", "国标编码",
+                    "治理后名称"]
             for c, h in enumerate(hdrs, 1):
                 cell = ws.cell(row=1, column=c, value=h)
                 cell.fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
@@ -714,10 +715,11 @@ class MainApplication:
                        ch.get("gbManufacturer", ""), ch.get("id", ""),
                        ch.get("gbModel", ""), ch.get("gbOwner", ""),
                        ch.get("gbAddress", ""), ch.get("gbPassword", ""),
-                       ch.get("gbDeviceId", "")]
+                       ch.get("gbDeviceId", ""),
+                       ch.get("gbName", "")]
                 for j, v in enumerate(row, 1):
                     ws.cell(row=i + 1, column=j, value=v)
-            for i, w in enumerate([18, 24, 25, 10, 15, 10, 10, 15, 10, 10, 12, 18, 10, 10], 1):
+            for i, w in enumerate([18, 24, 25, 10, 15, 10, 10, 15, 10, 10, 12, 18, 10, 10, 20], 1):
                 ws.column_dimensions[ws.cell(1, i).column_letter].width = w
             wb.save(f)
             set_st(f"导出成功: {os.path.basename(f)}")
@@ -1565,6 +1567,7 @@ class MainApplication:
                             ch.get("gbAddress", ""),
                             ch.get("gbPassword", ""),
                             ch.get("gbDeviceId", ""),
+                            ch.get("gbName", ""),
                         ))
                 except Exception:
                     pass
@@ -1574,7 +1577,8 @@ class MainApplication:
             ws.title = "通道列表"
             headers_row = ["设备名称", "设备ID", "通道名称", "通道类型", "区域编码",
                            "经度", "纬度", "厂家", "数据库ID",
-                           "设备型号", "设备归属", "地址", "密码", "国标编码"]
+                           "设备型号", "设备归属", "地址", "密码", "国标编码",
+                           "治理后名称"]
             for c, h in enumerate(headers_row, 1):
                 cell = ws.cell(row=1, column=c, value=h)
                 cell.fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
@@ -1583,7 +1587,7 @@ class MainApplication:
             for i, row_data in enumerate(all_rows, 1):
                 for j, v in enumerate(row_data, 1):
                     ws.cell(row=i + 1, column=j, value=v)
-            col_widths = [18, 24, 25, 10, 15, 10, 10, 15, 10, 10, 12, 18, 10, 10]
+            col_widths = [18, 24, 25, 10, 15, 10, 10, 15, 10, 10, 12, 18, 10, 10, 20]
             for i, w in enumerate(col_widths, 1):
                 ws.column_dimensions[ws.cell(1, i).column_letter].width = w
             wb.save(file)
@@ -2062,6 +2066,7 @@ class MainApplication:
                 ("地址",       20, EDITABLE_FILL, GREEN_FONT, "✎ 可修改"),
                 ("密码",       12, EDITABLE_FILL, GREEN_FONT, "✎ 可修改"),
                 ("国标编码",   22, INFO_FILL,     BLUE_FONT,  "ⓘ 参考信息"),
+                ("治理后名称", 20, INFO_FILL,     BLUE_FONT,  "ⓘ 参考信息"),
             ]
 
             # 写入表头（第1行）
@@ -2161,7 +2166,8 @@ class MainApplication:
             ws = wb.active
             ws.title = "通道列表"
             headers = ["序号", "设备ID", "名称", "通道类型", "区域编码", "经度", "纬度", "厂家", "数据库ID",
-                       "设备型号", "设备归属", "地址", "密码", "国标编码"]
+                       "设备型号", "设备归属", "地址", "密码", "国标编码",
+                       "治理后名称"]
             for c, h in enumerate(headers, 1):
                 cell = ws.cell(row=1, column=c, value=h)
                 cell.fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
@@ -2173,10 +2179,10 @@ class MainApplication:
                        ch.get("civilCode", ""), ch.get("gbLongitude", 0), ch.get("gbLatitude", 0), ch.get("gbManufacturer", ""), ch.get("id", ""),
                        ch.get("gbModel", ""), ch.get("gbOwner", ""),
                        ch.get("gbAddress", ""), ch.get("gbPassword", ""),
-                       ch.get("gbDeviceId", "")]
+                       ch.get("gbDeviceId", ""), ch.get("gbName", "")]
                 for j, v in enumerate(row, 1):
                     ws.cell(row=i+1, column=j, value=v)
-            for i, w in enumerate([6, 22, 25, 10, 15, 10, 10, 15, 10, 10, 12, 18, 10, 10], 1):
+            for i, w in enumerate([6, 22, 25, 10, 15, 10, 10, 15, 10, 10, 12, 18, 10, 10, 20], 1):
                 ws.column_dimensions[ws.cell(1, i).column_letter].width = w
             wb.save(file)
             self.set_statusbar(f"导出成功: {os.path.basename(file)}")
